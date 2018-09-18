@@ -3,8 +3,8 @@
 #include <time.h>
 #include <pthread/pthread.h>
 
-#define true  1U;
-#define false 0U;
+#define true  1U
+#define false 0U
 typedef unsigned char  uint8;
 typedef unsigned short uint16;
 typedef unsigned int   uint32;
@@ -15,14 +15,23 @@ static uint8  memory[0x10000];
 static uint8  regArray[0x10];
 static uint16 regPC;
 static uint16 regI;
+static uint16 stack[17]; //16+1 for direct indexing because idk how the roms use this
+static uint16 sp = 0;
+static uint8  regDelay;
+static uint8  regSound;
+
+static uint8  screen[64*32];
+
+static BOOL   keypad[16];
 
 static BOOL     runCycle = false;
 static uint32   masterClockTimer = 0;
 static BOOL     runBinary = true;
 
 void *masterClock(void *vargp);
+static void load_chip8_fontset(void);
 static void executeCycle(void);
-static void decode(uint16  inst);
+static void decode(uint16 inst);
 static void subOp8(uint16 inst);
 static void subOpF(uint16 inst);
 
@@ -55,6 +64,8 @@ int main()
         //close file, we don't need it anymore
         fclose(rom);
     }
+
+    load_chip8_fontset();
 
     //create Master clock thread at 500Hz
     pthread_create(&timerThreadID, NULL, &masterClock, NULL);
@@ -92,6 +103,31 @@ void * masterClock(void *vargp)
     return NULL;
 }
 
+static void load_chip8_fontset(void)
+{
+    uint8 chip8_fontset[80] =
+        { 
+            0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
+            0x20, 0x60, 0x20, 0x20, 0x70, // 1
+            0xF0, 0x10, 0xF0, 0x80, 0xF0, // 2
+            0xF0, 0x10, 0xF0, 0x10, 0xF0, // 3
+            0x90, 0x90, 0xF0, 0x10, 0x10, // 4
+            0xF0, 0x80, 0xF0, 0x10, 0xF0, // 5
+            0xF0, 0x80, 0xF0, 0x90, 0xF0, // 6
+            0xF0, 0x10, 0x20, 0x40, 0x40, // 7
+            0xF0, 0x90, 0xF0, 0x90, 0xF0, // 8
+            0xF0, 0x90, 0xF0, 0x10, 0xF0, // 9
+            0xF0, 0x90, 0xF0, 0x90, 0x90, // A
+            0xE0, 0x90, 0xE0, 0x90, 0xE0, // B
+            0xF0, 0x80, 0x80, 0x80, 0xF0, // C
+            0xE0, 0x90, 0x90, 0x90, 0xE0, // D
+            0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
+            0xF0, 0x80, 0xF0, 0x80, 0x80  // F
+        };
+    
+    memcpy(&memory[0x50], &chip8_fontset[0], sizeof(chip8_fontset));
+}
+
 static void executeCycle(void)
 {
     uint16 instruction = 0U;
@@ -122,10 +158,17 @@ static void decode(uint16 inst)
     {
         case 0x00E0:
         {
+            //CLS
+            //clear screen
+            memset(&screen[0], 0, sizeof(screen));
             break;
         }
         case 0x00EE:
         {
+            //RETURN
+            regPC = stack[sp];
+            sp = sp - 1;
+            regPC = regPC - 2; //subtract 2 because 2 will be added at end of cycle
             break;
         }
         case 0x1:
@@ -136,6 +179,10 @@ static void decode(uint16 inst)
         }
         case 0x2:
         {
+            //CALL
+            sp = sp + 1;
+            stack[sp] = regPC;
+            regPC = addr - 2; //subtract 2 because 2 will be added at end of cycle
             break;
         }
         case 0x3:
@@ -225,6 +272,22 @@ static void decode(uint16 inst)
         case 0xE:
         {
             //SKP
+            switch (literal)
+            {
+                case 0x9E:
+                    if(keypad[regArray[regX]] == true)
+                    {
+                        regPC = regPC + 2;
+                    }
+                    break;
+
+                case 0xA1:
+                    if(keypad[regArray[regX]] == false)
+                    {
+                        regPC = regPC + 2;
+                    }
+                    break;
+            }
             break;
         }
         case 0xF:
@@ -338,5 +401,64 @@ static void subOp8(uint16 inst)
 
 static void subOpF(uint16 inst)
 {
+    uint8 op2;
+    uint8 regX;
+    uint8 regCount;
+
+    op2 = 0xFFU & inst;
+    regX = (0x0F00 & inst) >> 8;
+    //TO-DO check bounds on regx
+
+    switch(op2)
+    {
+        case 0x07:
+            //LD Delay
+            regArray[regX] = regDelay;
+            break;
+
+        case 0x0A:
+            //Wait for key press
+            break;
+
+        case 0x15:
+            //SET Delay
+            regDelay = regArray[regX];
+            break;
+
+        case 0x18:
+            //SET Sound
+            regSound = regArray[regX];
+            break;
+
+        case 0x1E:
+            //ADD I
+            regI = regI + regArray[regX];
+            break;
+
+        case 0x29:
+            break;
+
+        case 0x33:
+            break;
+
+        case 0x55:
+            //STORE [I]
+            for(regCount = 0; regCount <= regX; regCount++)
+            {
+                memory[regI + regCount] = regArray[regCount];
+            }
+            break;
+
+        case 0x65:
+            //LOAD [I]
+            for(regCount = 0; regCount <= regX; regCount++)
+            {
+                regArray[regCount] = memory[regI + regCount];
+            }
+            break;
+
+        default:
+            break;
+    }
 
 }
