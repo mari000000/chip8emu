@@ -12,7 +12,11 @@
                 "cpu.c",
                 "-o",
                 "chip8Emu",
-                "-pthread"
+                "-pthread",
+                "-framework",
+                "SDL2",
+                "-F",
+                "/Library/Frameworks"
             ],
             "group": {
                 "kind": "build",

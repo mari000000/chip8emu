@@ -1,7 +1,10 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <time.h>
 #include <pthread/pthread.h>
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_audio.h>
 
 #define true  1U
 #define false 0U
@@ -37,11 +40,17 @@ static void subOpF(uint16 inst);
 
 int main()
 {
-    
+    if(SDL_Init(SDL_INIT_AUDIO | SDL_INIT_VIDEO) != 0)
+    {
+        SDL_Log("Unable to initialize SDL: %s", SDL_GetError());
+        return 1;
+    }
     long romSize = 0;
     pthread_t timerThreadID;
     //start program counter at 0x200
     regPC = 0x0200U;
+
+    srand(time(0));
 
     //open rom to run
     FILE * rom;
@@ -80,15 +89,20 @@ int main()
         }
     }
     pthread_join(timerThreadID, NULL);
+    SDL_Quit();
     return 0;
 }
 
 void * masterClock(void *vargp)
 {   
-    #define MSEC_2 2000         //2 * ( CLOCKS_PER_SEC / 1000 )
+    #define MSEC_2      2000         //2 * ( CLOCKS_PER_SEC / 1000 )
+    #define MSEC_16P6   16667        //16.667 * ( CLOCKS_PER_SEC / 1000 )
     clock_t baselineTime;
+    clock_t timerClk60;
+    BOOL    soundPlaying = false;
 
     baselineTime = clock();
+    timerClk60 = baselineTime;
 
     //Clock timer increments at a rate of 500Hz (2ms)
     while(runBinary)
@@ -98,6 +112,27 @@ void * masterClock(void *vargp)
             masterClockTimer++;
             runCycle = true;
             baselineTime = clock();
+        }
+
+        // 60Hz Timers
+        if((baselineTime - clock()) >= MSEC_16P6)
+        {
+            if(regDelay != 0U)
+            {
+                regDelay--;
+            }
+            if(regSound != 0U)
+            {
+                regSound--;
+                if(soundPlaying == false)
+                {
+                    //play sound
+                }
+            }
+            else 
+            {
+                //stop sound
+            }
         }
     }
     return NULL;
@@ -261,7 +296,7 @@ static void decode(uint16 inst)
         case 0xC:
         {
             //RND
-
+            regArray[regX] = (literal & (uint8)rand());
             break;
         }
         case 0xD:
