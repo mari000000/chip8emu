@@ -5,6 +5,8 @@
 #include <pthread/pthread.h>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_audio.h>
+#include <SDL2/SDL_video.h>
+#include <SDL2/SDL_keyboard.h>
 
 #define true  1U
 #define false 0U
@@ -31,6 +33,11 @@ static BOOL     runCycle = false;
 static uint32   masterClockTimer = 0;
 static BOOL     runBinary = true;
 
+//counters
+uint32 i;
+uint32 j;
+
+void setPixel(SDL_Surface * surface, uint32 x, uint32 y, uint32 pixel);
 void *masterClock(void *vargp);
 static void load_chip8_fontset(void);
 static void executeCycle(void);
@@ -38,12 +45,40 @@ static void decode(uint16 inst);
 static void subOp8(uint16 inst);
 static void subOpF(uint16 inst);
 
+
 int main()
 {
+    SDL_Window * window = NULL;
+    SDL_Surface * screenSurface = NULL;
+    const uint8 * keyboard = NULL;
+    SDL_Event event;
+
+    //Temp remove this
+    for( i = 0; i < sizeof(screen); i+=3)
+    {
+        screen[i] = 0x01;
+    }
+
     if(SDL_Init(SDL_INIT_AUDIO | SDL_INIT_VIDEO) != 0)
     {
         SDL_Log("Unable to initialize SDL: %s", SDL_GetError());
         return 1;
+    }
+
+    window = SDL_CreateWindow("Space Invaders", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 640, 320, SDL_WINDOW_OPENGL);
+    if(window == NULL)
+    {
+        SDL_Log("Failed to allocate screen memory: %s", SDL_GetError());
+    }
+    else
+    {
+        //Get window surface
+        screenSurface = SDL_GetWindowSurface( window );
+
+        //Fill the surface white
+        SDL_FillRect( screenSurface, NULL, SDL_MapRGB( screenSurface->format, 0xFF, 0xFF, 0xFF ) );
+        
+        SDL_UpdateWindowSurface(window);
     }
     long romSize = 0;
     pthread_t timerThreadID;
@@ -83,14 +118,67 @@ int main()
     while(runBinary){
         if(runCycle)
         {
+            //Get Keyboard state
+            SDL_PollEvent(&event);//dont check this just yet
+            keyboard = SDL_GetKeyboardState(NULL);
+            if(keyboard[SDL_SCANCODE_Q])
+            {
+                runBinary = false;
+            }
+
             //run current cycle
             executeCycle();
+
+            //Update screen surface
+            SDL_LockSurface(screenSurface);
+
+            for(i = 0; i < 64; i++)
+            {
+                for(j = 0; j < 32; j++)
+                {
+                    if(screen[i + (j * 64)] == 1)
+                    {
+                        setPixel(screenSurface, i, j, 0xFFFFFF00);
+                    }
+                    else
+                    {
+                        setPixel(screenSurface, i, j, 0xFF000000);
+                    }
+                }
+            }
+            SDL_UnlockSurface(screenSurface);
+
+            //write to window
+            SDL_UpdateWindowSurface(window);
+            
             runCycle = false;
         }
     }
+
+    //clean up
     pthread_join(timerThreadID, NULL);
+    SDL_DestroyWindow(window);
     SDL_Quit();
     return 0;
+}
+
+void setPixel(SDL_Surface * surface, uint32 x, uint32 y, uint32 pixel)
+{
+    //scale and set pixel
+    //fixed 10*10 size
+    uint32 actualX = x * 10;
+    uint32 actualY = y * 10;
+    uint32 i;
+    uint32 j;
+    for( i = actualX; i < (actualX + 10); i++)
+    {
+        for( j = actualY; j < (actualY + 10); j++)
+        {
+            uint8 * targetPixel = (uint8 *)surface->pixels + j * surface->pitch + i * 4;
+            *(uint32 *)targetPixel = pixel;
+        }
+    }
+    
 }
 
 void * masterClock(void *vargp)
@@ -201,9 +289,9 @@ static void decode(uint16 inst)
         case 0x00EE:
         {
             //RETURN
-            regPC = stack[sp];
-            sp = sp - 1;
-            regPC = regPC - 2; //subtract 2 because 2 will be added at end of cycle
+            //regPC = stack[sp];
+            //sp = sp - 1;
+            //regPC = regPC - 2; //subtract 2 because 2 will be added at end of cycle
             break;
         }
         case 0x1:
@@ -215,9 +303,9 @@ static void decode(uint16 inst)
         case 0x2:
         {
             //CALL
-            sp = sp + 1;
-            stack[sp] = regPC;
-            regPC = addr - 2; //subtract 2 because 2 will be added at end of cycle
+            //sp = sp + 1;
+            //stack[sp] = regPC;
+            //regPC = addr - 2; //subtract 2 because 2 will be added at end of cycle
             break;
         }
         case 0x3:
