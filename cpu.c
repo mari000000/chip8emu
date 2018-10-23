@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
+#include <math.h>
 #include <pthread/pthread.h>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_audio.h>
@@ -11,16 +12,21 @@
 #define true  1U
 #define false 0U
 typedef unsigned char  uint8;
+typedef signed char    sing8;
 typedef unsigned short uint16;
+typedef signed short   sint16;
 typedef unsigned int   uint32;
+typedef signed int     sint32;
 typedef uint8 BOOL;
 
+const int AMPLITUDE = 28000;
+const int SAMPLE_RATE = 44100;
 
 static uint8  memory[0x10000];
 static uint8  regArray[0x10];
 static uint16 regPC;
 static uint16 regI;
-static uint16 stack[17]; //16+1 for direct indexing because idk how the roms use this
+static uint16 stack[17] = {0}; //16+1 for direct indexing because idk how the roms use this
 static uint16 sp = 0;
 static uint8  regDelay;
 static uint8  regSound;
@@ -33,11 +39,14 @@ static BOOL     runCycle = false;
 static uint32   masterClockTimer = 0;
 static BOOL     runBinary = true;
 
+
+
 //counters
 uint32 i;
 uint32 j;
 
 void setPixel(SDL_Surface * surface, uint32 x, uint32 y, uint32 pixel);
+void audio_callback(void *user_data, uint8 *raw_buffer, int bytes);
 void *masterClock(void *vargp);
 static void load_chip8_fontset(void);
 static void executeCycle(void);
@@ -52,12 +61,14 @@ int main()
     SDL_Surface * screenSurface = NULL;
     const uint8 * keyboard = NULL;
     SDL_Event event;
+    
+    
 
     //Temp remove this
-    for( i = 0; i < sizeof(screen); i+=3)
-    {
-        screen[i] = 0x01;
-    }
+    // for( i = 0; i < sizeof(screen); i+=3)
+    // {
+    //     screen[i] = 0x01;
+    // }
 
     if(SDL_Init(SDL_INIT_AUDIO | SDL_INIT_VIDEO) != 0)
     {
@@ -65,7 +76,7 @@ int main()
         return 1;
     }
 
-    window = SDL_CreateWindow("Space Invaders", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 640, 320, SDL_WINDOW_OPENGL);
+    window = SDL_CreateWindow("Space Invaders", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 640, 320, SDL_WINDOW_SHOWN);
     if(window == NULL)
     {
         SDL_Log("Failed to allocate screen memory: %s", SDL_GetError());
@@ -76,9 +87,9 @@ int main()
         screenSurface = SDL_GetWindowSurface( window );
 
         //Fill the surface white
-        SDL_FillRect( screenSurface, NULL, SDL_MapRGB( screenSurface->format, 0xFF, 0xFF, 0xFF ) );
+        //SDL_FillRect( screenSurface, NULL, SDL_MapRGB( screenSurface->format, 0xFF, 0xFF, 0xFF ) );
         
-        SDL_UpdateWindowSurface(window);
+        //SDL_UpdateWindowSurface(window);
     }
     long romSize = 0;
     pthread_t timerThreadID;
@@ -124,6 +135,7 @@ int main()
             if(keyboard[SDL_SCANCODE_Q])
             {
                 runBinary = false;
+                break;
             }
 
             //run current cycle
@@ -138,7 +150,7 @@ int main()
                 {
                     if(screen[i + (j * 64)] == 1)
                     {
-                        setPixel(screenSurface, i, j, 0xFFFFFF00);
+                        setPixel(screenSurface, i, j, 0x0000FF00);
                     }
                     else
                     {
@@ -158,6 +170,7 @@ int main()
     //clean up
     pthread_join(timerThreadID, NULL);
     SDL_DestroyWindow(window);
+    
     SDL_Quit();
     return 0;
 }
@@ -181,16 +194,43 @@ void setPixel(SDL_Surface * surface, uint32 x, uint32 y, uint32 pixel)
     
 }
 
+void audio_callback(void *user_data, uint8 *raw_buffer, int bytes)
+{
+    sint16 *buffer = (sint16*)raw_buffer;
+    int length = bytes / 2; // 2 bytes per sample for AUDIO_S16SYS
+    int sample_nr = *(int*)user_data;
+
+    for(int i = 0; i < length; i++, sample_nr++)
+    {
+        double time = (double)sample_nr / (double)SAMPLE_RATE;
+        buffer[i] = (Sint16)(AMPLITUDE * sin(2.0f * M_PI * 441.0f * time)); // render 441 HZ sine wave
+    }
+}
+
 void * masterClock(void *vargp)
 {   
     #define MSEC_2      2000         //2 * ( CLOCKS_PER_SEC / 1000 )
     #define MSEC_16P6   16667        //16.667 * ( CLOCKS_PER_SEC / 1000 )
     clock_t baselineTime;
     clock_t timerClk60;
+    int sample_nr = 0;
+    //SDL_AudioSpec want;
+    //SDL_AudioSpec have;
     BOOL    soundPlaying = false;
 
     baselineTime = clock();
     timerClk60 = baselineTime;
+
+    //want.freq = SAMPLE_RATE;
+    //want.format = AUDIO_S16SYS;
+    // want.channels = 1;
+    // want.samples = 2048;
+    // want.callback = audio_callback;
+    // want.userdata = &sample_nr;
+
+    //if(SDL_OpenAudio(&want, &have) != 0) SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Failed to open audio: %s", SDL_GetError());
+    //if(want.format != have.format) SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "Failed to get the desired AudioSpec");
+
 
     //Clock timer increments at a rate of 500Hz (2ms)
     while(runBinary)
@@ -215,14 +255,17 @@ void * masterClock(void *vargp)
                 if(soundPlaying == false)
                 {
                     //play sound
+                    //SDL_PauseAudio(0); // start playing sound
                 }
             }
             else 
             {
                 //stop sound
+                //SDL_PauseAudio(1); // stop playing sound
             }
         }
     }
+    //SDL_CloseAudio(); //audio causing exception on quit
     return NULL;
 }
 
@@ -269,10 +312,12 @@ static void decode(uint16 inst)
     uint8 literal;
     uint8 regX;
     uint8 regY;
+    uint8 n;
     uint16 addr;
     uint8 op1 = (uint8)((0xF000U & inst) >> 12);
     regX = (0x0F00 & inst) >> 8;
     regY = (0x00F0 & inst) >> 4;
+    n = (0x000F & inst);
     literal = (uint8)(0x00FF & inst);
     addr = 0x0FFF & inst;
     //TO-DO check bounds on regx and y
@@ -289,9 +334,9 @@ static void decode(uint16 inst)
         case 0x00EE:
         {
             //RETURN
-            //regPC = stack[sp];
-            //sp = sp - 1;
-            //regPC = regPC - 2; //subtract 2 because 2 will be added at end of cycle
+            regPC = stack[sp];
+            sp = sp - 1;
+            regPC = regPC - 2; //subtract 2 because 2 will be added at end of cycle
             break;
         }
         case 0x1:
@@ -303,9 +348,9 @@ static void decode(uint16 inst)
         case 0x2:
         {
             //CALL
-            //sp = sp + 1;
-            //stack[sp] = regPC;
-            //regPC = addr - 2; //subtract 2 because 2 will be added at end of cycle
+            sp = sp + 1;
+            stack[sp] = regPC;
+            regPC = addr - 2; //subtract 2 because 2 will be added at end of cycle
             break;
         }
         case 0x3:
@@ -390,6 +435,34 @@ static void decode(uint16 inst)
         case 0xD:
         {
             //DRAW
+            uint8 i;
+            uint8 j;
+            uint8 byte;
+            uint16 position;
+            uint8 bit;
+
+            /*Draws a sprite at coordinate (VX, VY) that has a width of 8 pixels and a height of N pixels. 
+            Each row of 8 pixels is read as bit-coded starting from memory location I; 
+            I value doesn’t change after the execution of this instruction. As described above, 
+            VF is set to 1 if any screen pixels are flipped from set to unset when the sprite is drawn, 
+            and to 0 if that doesn’t happen */
+            regArray[0xF] = 0;
+
+            for( j = 0; j < n; j++ )
+            {
+                byte = memory[regI + j];
+                for( i = 0; i < 8; i++ )
+                {
+                    position = ((regX + j )* 64) + regY + i;
+                    bit = (byte >> (7 - i)) & 1;
+                    if(screen[position] == 1 && bit == 0)
+                    {
+                        regArray[0xF] = 1;
+                    }
+                    screen[position] = bit; 
+                }
+            }
+            
             break;
         }
         case 0xE:
@@ -559,9 +632,13 @@ static void subOpF(uint16 inst)
             break;
 
         case 0x29:
+            regI = memory[ 0x50 + (regX * 5) ];
             break;
 
         case 0x33:
+            memory[regI]     = regArray[regX] / 100;
+            memory[regI + 1] = (regArray[regX] / 10) % 10;
+            memory[regI + 2] = (regArray[regX] % 100) % 10;
             break;
 
         case 0x55:
