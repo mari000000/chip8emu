@@ -26,7 +26,7 @@ static uint8  memory[0x10000];
 static uint8  regArray[0x10];
 static uint16 regPC;
 static uint16 regI;
-static uint16 stack[17] = {0}; //16+1 for direct indexing because idk how the roms use this
+static uint16 stack[16] = {0};
 static uint16 sp = 0;
 static uint8  regDelay;
 static uint8  regSound;
@@ -440,6 +440,8 @@ static void decode(uint16 inst)
             uint8 byte;
             uint16 position;
             uint8 bit;
+            uint8 vX;
+            uint8 vY;
 
             /*Draws a sprite at coordinate (VX, VY) that has a width of 8 pixels and a height of N pixels. 
             Each row of 8 pixels is read as bit-coded starting from memory location I; 
@@ -447,13 +449,15 @@ static void decode(uint16 inst)
             VF is set to 1 if any screen pixels are flipped from set to unset when the sprite is drawn, 
             and to 0 if that doesn’t happen */
             regArray[0xF] = 0;
+            vX = regArray[regX];
+            vY = regArray[regY];
 
             for( j = 0; j < n; j++ )
             {
                 byte = memory[regI + j];
                 for( i = 0; i < 8; i++ )
                 {
-                    position = ((regX + j )* 64) + regY + i;
+                    position = ((vY + j )* 64) + vX + i;
                     bit = (byte >> (7 - i)) & 1;
                     if(screen[position] == 1 && bit == 0)
                     {
