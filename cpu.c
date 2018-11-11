@@ -12,7 +12,7 @@
 #define true  1U
 #define false 0U
 typedef unsigned char  uint8;
-typedef signed char    sing8;
+typedef signed char    sint8;
 typedef unsigned short uint16;
 typedef signed short   sint16;
 typedef unsigned int   uint32;
@@ -33,12 +33,14 @@ static uint8  regSound;
 
 static uint8  screen[64*32];
 
-static BOOL   keypad[16];
+static uint8  keypad[16];
+
+static uint8 keyMap[39] = {0x05}; //associative array.  Not optomized because I dont care anymore. 
 
 static BOOL     runCycle = false;
 static uint32   masterClockTimer = 0;
 static BOOL     runBinary = true;
-
+static BOOL     updateDisplay = false;
 
 
 //counters
@@ -61,14 +63,24 @@ int main()
     SDL_Surface * screenSurface = NULL;
     const uint8 * keyboard = NULL;
     SDL_Event event;
-    
-    
 
-    //Temp remove this
-    // for( i = 0; i < sizeof(screen); i+=3)
-    // {
-    //     screen[i] = 0x01;
-    // }
+    //init Key Map
+    keyMap[SDL_SCANCODE_1] = 0x01;
+    keyMap[SDL_SCANCODE_2] = 0x02;
+    keyMap[SDL_SCANCODE_3] = 0x03;
+    keyMap[SDL_SCANCODE_4] = 0x0C;
+    keyMap[SDL_SCANCODE_Q] = 0x04;
+    keyMap[SDL_SCANCODE_W] = 0x05;
+    keyMap[SDL_SCANCODE_E] = 0x06;
+    keyMap[SDL_SCANCODE_R] = 0x0D;
+    keyMap[SDL_SCANCODE_A] = 0x07;
+    keyMap[SDL_SCANCODE_S] = 0x08;
+    keyMap[SDL_SCANCODE_D] = 0x09;
+    keyMap[SDL_SCANCODE_F] = 0x0E;
+    keyMap[SDL_SCANCODE_Z] = 0x0A;
+    keyMap[SDL_SCANCODE_X] = 0x00;
+    keyMap[SDL_SCANCODE_C] = 0x0B;
+    keyMap[SDL_SCANCODE_V] = 0x0F;
 
     if(SDL_Init(SDL_INIT_AUDIO | SDL_INIT_VIDEO) != 0)
     {
@@ -85,11 +97,6 @@ int main()
     {
         //Get window surface
         screenSurface = SDL_GetWindowSurface( window );
-
-        //Fill the surface white
-        //SDL_FillRect( screenSurface, NULL, SDL_MapRGB( screenSurface->format, 0xFF, 0xFF, 0xFF ) );
-        
-        //SDL_UpdateWindowSurface(window);
     }
     long romSize = 0;
     pthread_t timerThreadID;
@@ -130,39 +137,59 @@ int main()
         if(runCycle)
         {
             //Get Keyboard state
-            SDL_PollEvent(&event);//dont check this just yet
-            keyboard = SDL_GetKeyboardState(NULL);
-            if(keyboard[SDL_SCANCODE_Q])
+            
+            while( SDL_PollEvent(&event))
             {
-                runBinary = false;
-                break;
-            }
+                switch( event.type )
+                {
+                    case SDL_KEYDOWN:
+                    case SDL_KEYUP:
+                        if(event.key.keysym.scancode < 39)
+                        {
+                            keypad[keyMap[event.key.keysym.scancode]] = event.key.state;
+                        }
+                        if(event.key.keysym.scancode == SDL_SCANCODE_K || event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) 
+                        {
+                            runBinary = false;
+                        }
+                    break;
+                }    
+            }//dont check this just yet
+            // keyboard = SDL_GetKeyboardState(NULL);
+            // if(keyboard[SDL_SCANCODE_P])
+            // {
+            //     runBinary = false;
+            //     break;
+            // }
 
             //run current cycle
             executeCycle();
 
-            //Update screen surface
-            SDL_LockSurface(screenSurface);
-
-            for(i = 0; i < 64; i++)
+            if( updateDisplay == true )
             {
-                for(j = 0; j < 32; j++)
+                //Update screen surface
+                SDL_LockSurface(screenSurface);
+
+                for(i = 0; i < 64; i++)
                 {
-                    if(screen[i + (j * 64)] == 1)
+                    for(j = 0; j < 32; j++)
                     {
-                        setPixel(screenSurface, i, j, 0x0000FF00);
-                    }
-                    else
-                    {
-                        setPixel(screenSurface, i, j, 0xFF000000);
+                        if(screen[i + (j * 64)] == 1)
+                        {
+                            setPixel(screenSurface, i, j, 0x0000FF00);
+                        }
+                        else
+                        {
+                            setPixel(screenSurface, i, j, 0xFF000000);
+                        }
                     }
                 }
-            }
-            SDL_UnlockSurface(screenSurface);
+                SDL_UnlockSurface(screenSurface);
 
-            //write to window
-            SDL_UpdateWindowSurface(window);
-            
+                //write to window
+                SDL_UpdateWindowSurface(window);
+                updateDisplay = false;
+            }
             runCycle = false;
         }
     }
@@ -209,17 +236,21 @@ void audio_callback(void *user_data, uint8 *raw_buffer, int bytes)
 
 void * masterClock(void *vargp)
 {   
-    #define MSEC_2      2000         //2 * ( CLOCKS_PER_SEC / 1000 )
-    #define MSEC_16P6   16667        //16.667 * ( CLOCKS_PER_SEC / 1000 )
+    
+    #define MSEC_2      (2 * (CLOCKS_PER_SEC / 1000))//2000         //2 * ( CLOCKS_PER_SEC / 1000 )
+    #define MSEC_16P6   (clock_t)(16.6 * (CLOCKS_PER_SEC / 1000))//16667        //16.667 * ( CLOCKS_PER_SEC / 1000 )
     clock_t baselineTime;
-    clock_t timerClk60;
+    clock_t baselineTime60;
+    clock_t timeDelta;
+    clock_t timeDelta60;
+    clock_t currentTime;
     int sample_nr = 0;
     //SDL_AudioSpec want;
     //SDL_AudioSpec have;
     BOOL    soundPlaying = false;
 
     baselineTime = clock();
-    timerClk60 = baselineTime;
+    baselineTime60 = baselineTime;
 
     //want.freq = SAMPLE_RATE;
     //want.format = AUDIO_S16SYS;
@@ -235,15 +266,19 @@ void * masterClock(void *vargp)
     //Clock timer increments at a rate of 500Hz (2ms)
     while(runBinary)
     {
-        if((baselineTime - clock()) >= MSEC_2)
+        currentTime = clock();
+        timeDelta = currentTime - baselineTime;
+        timeDelta60 = currentTime - baselineTime60;
+
+        if((timeDelta) >= MSEC_2)
         {
             masterClockTimer++;
             runCycle = true;
-            baselineTime = clock();
+            baselineTime = currentTime;
         }
 
         // 60Hz Timers
-        if((baselineTime - clock()) >= MSEC_16P6)
+        if((timeDelta60) >= MSEC_16P6)
         {
             if(regDelay != 0U)
             {
@@ -263,6 +298,7 @@ void * masterClock(void *vargp)
                 //stop sound
                 //SDL_PauseAudio(1); // stop playing sound
             }
+            baselineTime60 = currentTime;
         }
     }
     //SDL_CloseAudio(); //audio causing exception on quit
@@ -324,19 +360,27 @@ static void decode(uint16 inst)
 
     switch(op1)
     {
-        case 0x00E0:
+        case 0x0:
         {
-            //CLS
-            //clear screen
-            memset(&screen[0], 0, sizeof(screen));
-            break;
-        }
-        case 0x00EE:
-        {
-            //RETURN
-            regPC = stack[sp];
-            sp = sp - 1;
-            regPC = regPC - 2; //subtract 2 because 2 will be added at end of cycle
+            switch(literal)
+            {
+                case 0xE0:
+                {
+                    //CLS
+                    //clear screen
+                    memset(&screen[0], 0, sizeof(screen));
+                    updateDisplay = true;
+                    break;
+                }
+                case 0xEE:
+                {
+                    //RETURN
+                    sp = sp - 1;
+                    regPC = stack[sp];
+                    regPC = regPC - 2; //subtract 2 because 2 will be added at end of cycle
+                    break;
+                }
+            }
             break;
         }
         case 0x1:
@@ -348,8 +392,8 @@ static void decode(uint16 inst)
         case 0x2:
         {
             //CALL
+            stack[sp] = regPC + 2;
             sp = sp + 1;
-            stack[sp] = regPC;
             regPC = addr - 2; //subtract 2 because 2 will be added at end of cycle
             break;
         }
@@ -463,10 +507,10 @@ static void decode(uint16 inst)
                     {
                         regArray[0xF] = 1;
                     }
-                    screen[position] = bit; 
+                    screen[position] ^= bit; 
                 }
             }
-            
+            updateDisplay = true;
             break;
         }
         case 0xE:
@@ -604,6 +648,8 @@ static void subOpF(uint16 inst)
     uint8 op2;
     uint8 regX;
     uint8 regCount;
+    uint8 i;
+    BOOL  complete;
 
     op2 = 0xFFU & inst;
     regX = (0x0F00 & inst) >> 8;
@@ -618,6 +664,22 @@ static void subOpF(uint16 inst)
 
         case 0x0A:
             //Wait for key press
+            complete = false;
+            //search for key presses
+            for(i = 0; i < 16; i++)
+            {
+                if(keypad[i] == SDL_PRESSED)
+                {
+                    regArray[regX] = i;
+                    complete = true;
+                }
+                break;
+            }
+            if( complete == false )
+            {
+                //run this instruction again until a key is pressed.
+                regPC = regPC - 2;
+            }
             break;
 
         case 0x15:
